@@ -1,0 +1,11 @@
+# OS / editor cruft
+Thumbs.db
+.DS_Store
+*.log
+.vscode/
+.idea/
+
+# Never commit secrets. The API key lives in the browser's extension storage,
+# never in these files — but this is here as a guard in case a notes file is added.
+*.key
+secrets.*
