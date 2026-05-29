@@ -27,10 +27,11 @@
   let pillEnabled = true;     // show the ✦ pill when text is highlighted
   let pillPos = null;         // { left, top } absolute viewport spot chosen by the user
   let pillCalibrating = false;// "set position" mode triggered from settings
+  let formatMode = "plain";   // "plain" = strip markdown, "rich" = render **bold**
   try {
     chrome.storage.sync.get(
       ["presets", "defaultPreset", "panelPinned", "panelPos",
-       "pillEnabled", "pillPos", "pillCalibrating"],
+       "pillEnabled", "pillPos", "pillCalibrating", "formatMode"],
       (r) => {
         presets = (r && r.presets) || [];
         defaultPreset = (r && r.defaultPreset) || "";
@@ -39,6 +40,7 @@
         pillEnabled = !(r && r.pillEnabled === false);   // default ON
         pillPos = (r && r.pillPos) || null;
         pillCalibrating = !!(r && r.pillCalibrating);
+        formatMode = (r && r.formatMode) || "plain";
         if (pillCalibrating) startCalibration();
       }
     );
@@ -56,8 +58,32 @@
         pillCalibrating = !!ch.pillCalibrating.newValue;
         if (pillCalibrating) startCalibration(); else endCalibration();
       }
+      if (ch.formatMode) { formatMode = ch.formatMode.newValue || "plain"; updateFmtButtons(); }
     });
   } catch (_) {}
+
+  // --- Markdown handling ------------------------------------------------------
+  function escapeHtml(s) {
+    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+  // Strip markdown emphasis so nothing pastes as literal **, __, *, ` characters.
+  function mdToPlain(s) {
+    return s
+      .replace(/\*\*(.+?)\*\*/g, "$1")
+      .replace(/__(.+?)__/g, "$1")
+      .replace(/(^|[^*])\*(?!\s)([^*]+?)\*(?!\*)/g, "$1$2")
+      .replace(/`([^`]+)`/g, "$1");
+  }
+  // Convert markdown bold/italic to real HTML (everything else escaped).
+  function mdToHtml(s) {
+    let h = escapeHtml(s);
+    h = h.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+    h = h.replace(/__(.+?)__/g, "<strong>$1</strong>");
+    h = h.replace(/(^|[^*])\*(?!\s)([^*]+?)\*(?!\*)/g, "$1<em>$2</em>");
+    h = h.replace(/`([^`]+)`/g, "$1");
+    h = h.replace(/\n/g, "<br>");
+    return h;
+  }
 
   // --- Shadow-root host -------------------------------------------------------
   // pointer-events:none on the host so the (mostly invisible) overlay never
@@ -121,6 +147,12 @@
       .btn:disabled { opacity: .55; cursor: default; }
       .save { font-size: 16px; line-height: 1; padding: 8px 11px; }
       .foot { display: flex; gap: 6px; margin-top: 8px; }
+      .fmtrow { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
+      .fmtlabel { font-size: 11px; font-weight: 700; color: ${C.FG2};
+                  text-transform: uppercase; letter-spacing: .04em; margin-right: 2px; }
+      .fmtbtn { background: ${C.BG3}; color: ${C.FG}; padding: 5px 12px; font-size: 12px; }
+      .fmtbtn:hover { background: ${C.SEP}; }
+      .fmtbtn.active { background: ${C.ACT}; color: #fff; }
       .status { font-size: 12px; color: ${C.FG2}; margin-top: 8px; min-height: 16px; }
       .status.err { color: ${C.RED}; font-weight: 600; }
       .status.ok  { color: ${C.GRN}; font-weight: 600; }
@@ -166,6 +198,11 @@
           <button class="btn btn-ghost save" id="save" title="Save the box below as a new preset">＋</button>
         </div>
         <textarea id="instruction" placeholder="Tell Claude how to change the selected text…"></textarea>
+        <div class="fmtrow">
+          <span class="fmtlabel">Insert as</span>
+          <button class="btn fmtbtn" id="fmtPlain">Plain text</button>
+          <button class="btn fmtbtn" id="fmtBold">Bold</button>
+        </div>
         <div class="foot">
           <button class="btn btn-primary" id="go">Rewrite</button>
           <button class="btn btn-ghost" id="cancel">Esc</button>
@@ -205,6 +242,8 @@
   const calbar = root.getElementById("calbar");
   const calSave = root.getElementById("calSave");
   const calCancel = root.getElementById("calCancel");
+  const fmtPlainBtn = root.getElementById("fmtPlain");
+  const fmtBoldBtn = root.getElementById("fmtBold");
 
   // The selection we'll act on, captured before the panel steals focus.
   let target = null;
@@ -354,6 +393,7 @@
 
     panel.style.display = "block";
     applyDefaultPreset();            // preselect the user's default preset, if any
+    updateFmtButtons();
     pinBtn.classList.toggle("on", panelPinned);
 
     if (panelPinned && panelPos) {
@@ -425,6 +465,26 @@
   cancelBtn.addEventListener("click", closePanel);
   closeBtn.addEventListener("click", (e) => { e.stopPropagation(); closePanel(); });
   pill.addEventListener("click", () => { if (!pillCalibrating) openPanel(); });
+
+  // --- Plain / Bold formatting toggle ----------------------------------------
+  function updateFmtButtons() {
+    if (!fmtPlainBtn || !fmtBoldBtn) return;
+    fmtPlainBtn.classList.toggle("active", formatMode !== "rich");
+    fmtBoldBtn.classList.toggle("active", formatMode === "rich");
+  }
+  function renderPreviewAfter() {
+    if (pendingText == null) return;
+    if (formatMode === "rich") prevNew.innerHTML = mdToHtml(pendingText);
+    else prevNew.textContent = mdToPlain(pendingText);
+  }
+  function setFmtMode(mode) {
+    formatMode = mode;
+    updateFmtButtons();
+    try { chrome.storage.sync.set({ formatMode: mode }); } catch (_) {}
+    if (preview.style.display === "block") renderPreviewAfter();   // re-render live
+  }
+  fmtPlainBtn.addEventListener("click", () => setFmtMode("plain"));
+  fmtBoldBtn.addEventListener("click", () => setFmtMode("rich"));
 
   // Keep the page selection alive when clicking buttons inside our panel.
   // Listen on the shadow root so e.target is the real inner element.
@@ -581,7 +641,7 @@
     // Show a before/after preview instead of replacing immediately.
     pendingText = resp.text;
     prevOrig.textContent = target.text;
-    prevNew.textContent = resp.text;
+    renderPreviewAfter();            // renders plain or bold per the current mode
     editor.style.display = "none";
     preview.style.display = "block";
     setStatus("Review the change, then Apply.");
@@ -604,10 +664,12 @@
 
   // --- Apply the rewrite ------------------------------------------------------
   function applyResult(newText) {
+    const plain = mdToPlain(newText);
     if (target.kind === "input") {
+      // Inputs/textareas can't hold formatting — always plain, no stray markdown.
       const el = target.el, v = el.value;
-      el.value = v.slice(0, target.start) + newText + v.slice(target.end);
-      const caret = target.start + newText.length;
+      el.value = v.slice(0, target.start) + plain + v.slice(target.end);
+      const caret = target.start + plain.length;
       try { el.setSelectionRange(target.start, caret); } catch (_) {}
       el.dispatchEvent(new Event("input", { bubbles: true }));
       el.dispatchEvent(new Event("change", { bubbles: true }));
@@ -621,9 +683,13 @@
       target.host.focus();
       // execCommand is deprecated but remains the most reliable way to edit
       // contenteditable surfaces (Gmail, Slack) — it fires the events they expect.
-      if (document.execCommand("insertText", false, newText)) return "replaced";
+      if (formatMode === "rich") {
+        // Render **bold** as real bold, escaping everything else.
+        if (document.execCommand("insertHTML", false, mdToHtml(newText))) return "replaced";
+      }
+      if (document.execCommand("insertText", false, plain)) return "replaced";
     }
-    navigator.clipboard.writeText(newText).catch(() => {});
+    navigator.clipboard.writeText(plain).catch(() => {});
     return "copied";
   }
 })();
