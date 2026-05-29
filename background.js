@@ -18,6 +18,9 @@ const SYSTEM_PROMPT = [
 ].join(" ");
 
 // Default style presets, seeded on first install. Users can add/edit/delete them.
+// Bump PRESETS_VERSION when adding new defaults so existing installs get them
+// appended (by name) without clobbering the user's own presets.
+const PRESETS_VERSION = 2;
 const DEFAULT_PRESETS = [
   { name: "Improve writing",      instruction: "Improve the clarity and flow of this text while keeping my meaning and tone." },
   { name: "Shorten",             instruction: "Make this shorter and more concise without losing the key information." },
@@ -25,18 +28,45 @@ const DEFAULT_PRESETS = [
   { name: "More professional",   instruction: "Rewrite this in a more professional, polished tone." },
   { name: "More friendly",       instruction: "Rewrite this in a warmer, friendlier, more casual tone." },
   { name: "Translate → English", instruction: "Translate this into natural, fluent English." },
-  { name: "Translate → Spanish", instruction: "Translate this into natural, fluent Spanish." }
+  { name: "Translate → Spanish", instruction: "Translate this into natural, fluent Spanish." },
+  // Engineering-flavored presets for Oscar's vendor / RFQ / leadership writing.
+  { name: "Vendor reply",        instruction: "Rewrite this as a clear, professional reply to a machine shop or vendor. Keep it concise and unambiguous about specs, quantities, tolerances, and dates." },
+  { name: "Bullet summary",      instruction: "Turn this into a clear, concise bulleted summary of the key points." },
+  { name: "More direct",         instruction: "Rewrite this to be more direct and confident, without hedging or filler. Keep it respectful." },
+  { name: "More diplomatic",     instruction: "Rewrite this in a more diplomatic, tactful tone while keeping the message clear and honest." }
 ];
 
-// Seed defaults the first time the extension is installed.
-chrome.runtime.onInstalled.addListener(async (details) => {
-  if (details.reason === "install") {
-    const { presets, model } = await chrome.storage.sync.get(["presets", "model"]);
-    const seed = {};
-    if (!presets) seed.presets = DEFAULT_PRESETS;
-    if (!model) seed.model = DEFAULT_MODEL;
-    if (Object.keys(seed).length) await chrome.storage.sync.set(seed);
+// Seed on install; on update, append any new default presets the user is missing.
+chrome.runtime.onInstalled.addListener(() => ensurePresets());
+chrome.runtime.onStartup.addListener(() => ensurePresets());
+
+async function ensurePresets() {
+  const { presets, model, presetsVersion } =
+    await chrome.storage.sync.get(["presets", "model", "presetsVersion"]);
+  const out = {};
+
+  if (!Array.isArray(presets)) {
+    out.presets = DEFAULT_PRESETS;                       // fresh install
+  } else if ((presetsVersion || 0) < PRESETS_VERSION) {
+    // Append defaults whose names aren't already present (don't touch the rest).
+    const have = new Set(presets.map((p) => p.name));
+    const merged = presets.concat(DEFAULT_PRESETS.filter((p) => !have.has(p.name)));
+    if (merged.length !== presets.length) out.presets = merged;
   }
+  if (!model) out.model = DEFAULT_MODEL;
+  out.presetsVersion = PRESETS_VERSION;
+
+  await chrome.storage.sync.set(out);
+}
+
+// Keyboard command (Ctrl/Cmd+Shift+K) — handled at the browser level so it works
+// even on pages that swallow keydown. Tell the active tab's content script to open.
+chrome.commands.onCommand.addListener((command) => {
+  if (command !== "open-inline-edit") return;
+  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    const id = tabs && tabs[0] && tabs[0].id;
+    if (id != null) chrome.tabs.sendMessage(id, { type: "open-panel" }).catch(() => {});
+  });
 });
 
 // Content script asks us to rewrite text; we call the API and return the result.

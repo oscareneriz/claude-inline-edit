@@ -83,20 +83,37 @@
               border: 2px solid ${C.SEP}; border-top-color: ${C.ACT};
               border-radius: 50%; animation: sp .7s linear infinite; margin-right: 6px; }
       @keyframes sp { to { transform: rotate(360deg); } }
+      .box { font-size: 13px; border-radius: 8px; padding: 8px 9px; max-height: 110px;
+             overflow: auto; white-space: pre-wrap; word-break: break-word;
+             border: 1px solid ${C.SEP}; }
+      .orig { background: ${C.BG2}; color: ${C.FG2}; }
+      .neww { background: #fff; color: ${C.FG}; border-color: ${C.ACT}; }
     </style>
 
     <div class="pill" id="pill">✦ Edit</div>
 
     <div class="panel" id="panel">
-      <div class="label">Style preset</div>
-      <div class="row">
-        <select id="preset"></select>
-        <button class="btn btn-ghost save" id="save" title="Save the box below as a new preset">＋</button>
+      <div id="editor">
+        <div class="label">Style preset</div>
+        <div class="row">
+          <select id="preset"></select>
+          <button class="btn btn-ghost save" id="save" title="Save the box below as a new preset">＋</button>
+        </div>
+        <textarea id="instruction" placeholder="Tell Claude how to change the selected text…"></textarea>
+        <div class="foot">
+          <button class="btn btn-primary" id="go">Rewrite</button>
+          <button class="btn btn-ghost" id="cancel">Esc</button>
+        </div>
       </div>
-      <textarea id="instruction" placeholder="Tell Claude how to change the selected text…"></textarea>
-      <div class="foot">
-        <button class="btn btn-primary" id="go">Rewrite</button>
-        <button class="btn btn-ghost" id="cancel">Esc</button>
+      <div id="preview" style="display:none">
+        <div class="label">Before</div>
+        <div class="box orig" id="prevOrig"></div>
+        <div class="label" style="margin-top:8px">After</div>
+        <div class="box neww" id="prevNew"></div>
+        <div class="foot">
+          <button class="btn btn-primary" id="apply">Apply ✓</button>
+          <button class="btn btn-ghost" id="back">Back</button>
+        </div>
       </div>
       <div class="status" id="status"></div>
     </div>
@@ -110,9 +127,17 @@
   const cancelBtn = root.getElementById("cancel");
   const saveBtn = root.getElementById("save");
   const statusEl = root.getElementById("status");
+  const editor = root.getElementById("editor");
+  const preview = root.getElementById("preview");
+  const prevOrig = root.getElementById("prevOrig");
+  const prevNew = root.getElementById("prevNew");
+  const applyBtn = root.getElementById("apply");
+  const backBtn = root.getElementById("back");
 
   // The selection we'll act on, captured before the panel steals focus.
   let target = null;
+  // The rewrite waiting in the preview, not yet applied.
+  let pendingText = null;
 
   // --- Selection capture (called only on mouseup / shortcut) ------------------
   function captureSelection() {
@@ -188,13 +213,34 @@
     if (panel.style.display === "block") closePanel();
   }, true);
 
-  // Keyboard shortcut: Ctrl/Cmd + Shift + K
+  // Open the panel for the current selection (used by the shortcut + the command).
+  function openForSelection() {
+    const cap = captureSelection();
+    if (!cap) {
+      // No selection — flash the pill area isn't possible, so briefly show a hint.
+      return false;
+    }
+    target = cap;
+    openPanel();
+    return true;
+  }
+
+  // Keyboard shortcut fallback, in the CAPTURE phase so we see it before most
+  // pages can swallow it. The primary path is the Chrome command (background.js),
+  // which works even on pages that fully intercept keydown.
   document.addEventListener("keydown", (e) => {
     if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key && e.key.toLowerCase() === "k") {
-      const cap = captureSelection();
-      if (cap) { e.preventDefault(); target = cap; openPanel(); }
+      if (openForSelection()) e.preventDefault();
     }
-  });
+  }, true);
+
+  // The Chrome command (Ctrl/Cmd+Shift+K) routes through the background worker,
+  // which messages us here. This is the reliable path on stubborn pages.
+  try {
+    chrome.runtime.onMessage.addListener((msg) => {
+      if (msg && msg.type === "open-panel") openForSelection();
+    });
+  } catch (_) {}
 
   // --- Panel ------------------------------------------------------------------
   function buildPresetOptions() {
@@ -211,11 +257,15 @@
 
   function openPanel() {
     if (!target) return;
+    if (panel.style.display === "block") return;   // already open — don't re-open
     hidePill();
     buildPresetOptions();
     setStatus("");
     instruction.value = "";
     presetSel.value = "";
+    pendingText = null;
+    editor.style.display = "block";
+    preview.style.display = "none";
 
     const r = selectionRect();
     panel.style.display = "block";
@@ -229,6 +279,7 @@
   function closePanel() {
     panel.style.display = "none";
     target = null;
+    pendingText = null;
   }
 
   function setStatus(msg, cls) {
@@ -291,10 +342,28 @@
 
     if (!resp || resp.error) { setStatus(resp ? resp.error : "Unknown error.", "err"); return; }
 
-    const applied = applyResult(resp.text);
-    if (applied === "replaced") { setStatus("Done ✓", "ok"); setTimeout(closePanel, 500); }
-    else { setStatus("That text isn't editable — result copied to clipboard ✓", "ok"); }
+    // Show a before/after preview instead of replacing immediately.
+    pendingText = resp.text;
+    prevOrig.textContent = target.text;
+    prevNew.textContent = resp.text;
+    editor.style.display = "none";
+    preview.style.display = "block";
+    setStatus("Review the change, then Apply.");
   }
+
+  applyBtn.addEventListener("click", () => {
+    if (pendingText == null) return;
+    const applied = applyResult(pendingText);
+    if (applied === "replaced") { setStatus("Done ✓", "ok"); setTimeout(closePanel, 400); }
+    else { setStatus("That text isn't editable — result copied to clipboard ✓", "ok"); }
+  });
+
+  backBtn.addEventListener("click", () => {
+    preview.style.display = "none";
+    editor.style.display = "block";
+    setStatus("");
+    instruction.focus();
+  });
 
   // --- Apply the rewrite ------------------------------------------------------
   function applyResult(newText) {
