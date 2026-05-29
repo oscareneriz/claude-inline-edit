@@ -125,7 +125,7 @@
       }
       .pill:hover { background: ${C.ACT2}; }
       .panel {
-        display: none; width: 320px; padding: 12px;
+        display: none; width: 320px; padding: 0 12px 12px;
         background: ${C.BG}; border: 1px solid ${C.SEP}; border-radius: 12px;
         box-shadow: 0 8px 28px rgba(0,0,0,.28); color: ${C.FG};
         min-width: 240px; min-height: 140px; overflow: hidden;
@@ -134,7 +134,10 @@
                  padding: 2px 6px; border-radius: 6px; display: inline-block; }
       .sizebtn:hover { background: ${C.BG3}; color: ${C.FG}; }
       .head { display: flex; align-items: center; justify-content: space-between;
-              margin: -2px 0 9px; cursor: move; user-select: none; }
+              position: sticky; top: 0; z-index: 2; background: ${C.BG};
+              margin: 0 -12px 9px; padding: 11px 12px 8px;
+              border-bottom: 1px solid ${C.SEP}; border-radius: 12px 12px 0 0;
+              cursor: move; user-select: none; }
       .title { font-size: 12px; font-weight: 700; color: ${C.FG2}; letter-spacing: .03em; }
       .headbtns { display: flex; align-items: center; gap: 2px; }
       .pin { cursor: pointer; font-size: 13px; line-height: 1; padding: 3px 5px;
@@ -156,7 +159,7 @@
         padding: 7px 9px; width: 100%; outline: none;
       }
       select:focus, input:focus, textarea:focus { border-color: ${C.ACT}; }
-      textarea { resize: vertical; min-height: 54px; margin-top: 8px; }
+      textarea { resize: none; min-height: 54px; margin-top: 8px; overflow: auto; }
       .btn {
         font-family: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
         border: none; border-radius: 8px; padding: 8px 12px; white-space: nowrap;
@@ -418,6 +421,7 @@
     sizeCurrent = "small";           // always open at the small size
     applyPanelSize();
     applyDefaultPreset();            // preselect the user's default preset, if any
+    autoGrow(instruction);
     updateFmtButtons();
     pinBtn.classList.toggle("on", panelPinned);
 
@@ -473,6 +477,7 @@
   presetSel.addEventListener("change", () => {
     const i = presetSel.value;
     if (i !== "") { instruction.value = presets[Number(i)].instruction; instruction.focus(); }
+    autoGrow(instruction);
   });
 
   saveBtn.addEventListener("click", async () => {
@@ -695,6 +700,19 @@
   instruction.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); run(); }
     if (e.key === "Escape") { e.preventDefault(); closePanel(); }
+  });
+
+  // Grow the instruction box to fit its text (up to a cap, then it scrolls).
+  function autoGrow(el) {
+    el.style.height = "auto";
+    el.style.height = Math.min(el.scrollHeight, 220) + "px";
+  }
+  instruction.addEventListener("input", () => autoGrow(instruction));
+
+  // Esc closes the window, but only while you're interacting with it (focus is
+  // inside the panel). Clicking out on the page first means Esc won't reach here.
+  panel.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closePanel(); }
   });
 
   goBtn.addEventListener("click", run);
