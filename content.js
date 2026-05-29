@@ -213,6 +213,11 @@
         <div class="box orig" id="prevOrig"></div>
         <div class="label" style="margin-top:8px">After</div>
         <div class="box neww" id="prevNew"></div>
+        <div class="fmtrow">
+          <span class="fmtlabel">Insert as</span>
+          <button class="btn fmtbtn" id="fmtPlain2">Plain text</button>
+          <button class="btn fmtbtn" id="fmtBold2">Bold</button>
+        </div>
         <div class="foot">
           <button class="btn btn-primary" id="apply">Apply ✓</button>
           <button class="btn btn-ghost" id="back">Back</button>
@@ -244,6 +249,8 @@
   const calCancel = root.getElementById("calCancel");
   const fmtPlainBtn = root.getElementById("fmtPlain");
   const fmtBoldBtn = root.getElementById("fmtBold");
+  const fmtPlainBtn2 = root.getElementById("fmtPlain2");
+  const fmtBoldBtn2 = root.getElementById("fmtBold2");
 
   // The selection we'll act on, captured before the panel steals focus.
   let target = null;
@@ -468,9 +475,9 @@
 
   // --- Plain / Bold formatting toggle ----------------------------------------
   function updateFmtButtons() {
-    if (!fmtPlainBtn || !fmtBoldBtn) return;
-    fmtPlainBtn.classList.toggle("active", formatMode !== "rich");
-    fmtBoldBtn.classList.toggle("active", formatMode === "rich");
+    const isRich = formatMode === "rich";
+    [fmtPlainBtn, fmtPlainBtn2].forEach((b) => b && b.classList.toggle("active", !isRich));
+    [fmtBoldBtn, fmtBoldBtn2].forEach((b) => b && b.classList.toggle("active", isRich));
   }
   function renderPreviewAfter() {
     if (pendingText == null) return;
@@ -485,6 +492,8 @@
   }
   fmtPlainBtn.addEventListener("click", () => setFmtMode("plain"));
   fmtBoldBtn.addEventListener("click", () => setFmtMode("rich"));
+  fmtPlainBtn2.addEventListener("click", () => setFmtMode("plain"));
+  fmtBoldBtn2.addEventListener("click", () => setFmtMode("rich"));
 
   // Keep the page selection alive when clicking buttons inside our panel.
   // Listen on the shadow root so e.target is the real inner element.
