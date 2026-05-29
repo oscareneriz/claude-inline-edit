@@ -1,8 +1,12 @@
 // ============================================================================
 // Claude Inline Edit — content script
-// Shows a pill when you select text, opens a prompt panel with style presets,
-// asks the background worker to rewrite, and drops the result back in place.
+// Shows a pill when you finish selecting text, opens a prompt panel with style
+// presets, asks the background worker to rewrite, and drops the result in place.
 // All UI lives in a shadow root so page CSS can't break it.
+//
+// Perf note: we do NOTHING during the drag itself. Work happens only on mouseup
+// and on the keyboard shortcut — never on selectionchange — so selecting text
+// on heavy pages (Gmail, docs) stays smooth.
 // ============================================================================
 
 (() => {
@@ -17,30 +21,37 @@
   };
 
   let presets = [];
-  chrome.storage.sync.get(["presets"], (r) => { presets = r.presets || []; });
-  chrome.storage.onChanged.addListener((changes) => {
-    if (changes.presets) presets = changes.presets.newValue || [];
-  });
+  try {
+    chrome.storage.sync.get(["presets"], (r) => { presets = (r && r.presets) || []; });
+    chrome.storage.onChanged.addListener((ch) => {
+      if (ch.presets) presets = ch.presets.newValue || [];
+    });
+  } catch (_) {}
 
   // --- Shadow-root host -------------------------------------------------------
+  // pointer-events:none on the host so the (mostly invisible) overlay never
+  // intercepts clicks or text selection on the page. The pill/panel re-enable
+  // pointer events on themselves.
   const host = document.createElement("div");
-  host.style.cssText = "all:initial;position:absolute;z-index:2147483647;top:0;left:0;";
+  host.style.cssText =
+    "position:fixed;top:0;left:0;width:0;height:0;margin:0;padding:0;border:0;" +
+    "z-index:2147483647;pointer-events:none;";
   const root = host.attachShadow({ mode: "open" });
   document.documentElement.appendChild(host);
 
   root.innerHTML = `
     <style>
-      :host { all: initial; }
       * { box-sizing: border-box; font-family: "Segoe UI", system-ui, sans-serif; }
+      .pill, .panel { position: fixed; pointer-events: auto; }
       .pill {
-        position: absolute; display: none; align-items: center; gap: 5px;
+        display: none; align-items: center; gap: 5px;
         padding: 5px 11px; border-radius: 999px; cursor: pointer; user-select: none;
         background: ${C.ACT}; color: #fff; font-size: 13px; font-weight: 600;
         box-shadow: 0 3px 10px rgba(0,0,0,.25); white-space: nowrap;
       }
       .pill:hover { background: ${C.ACT2}; }
       .panel {
-        position: absolute; display: none; width: 320px; padding: 12px;
+        display: none; width: 320px; padding: 12px;
         background: ${C.BG}; border: 1px solid ${C.SEP}; border-radius: 12px;
         box-shadow: 0 8px 28px rgba(0,0,0,.28); color: ${C.FG};
       }
@@ -63,8 +74,8 @@
       .btn-ghost { background: ${C.BG3}; color: ${C.FG}; }
       .btn-ghost:hover { background: ${C.SEP}; }
       .btn:disabled { opacity: .55; cursor: default; }
-      .foot { display: flex; gap: 6px; margin-top: 8px; }
       .save { font-size: 16px; line-height: 1; padding: 8px 11px; }
+      .foot { display: flex; gap: 6px; margin-top: 8px; }
       .status { font-size: 12px; color: ${C.FG2}; margin-top: 8px; min-height: 16px; }
       .status.err { color: ${C.RED}; font-weight: 600; }
       .status.ok  { color: ${C.GRN}; font-weight: 600; }
@@ -103,8 +114,7 @@
   // The selection we'll act on, captured before the panel steals focus.
   let target = null;
 
-  // --- Selection capture ------------------------------------------------------
-  // Returns a descriptor we can later use to replace the text, or null.
+  // --- Selection capture (called only on mouseup / shortcut) ------------------
   function captureSelection() {
     const active = document.activeElement;
     if (active && (active.tagName === "TEXTAREA" || active.tagName === "INPUT")) {
@@ -121,57 +131,66 @@
       const range = sel.getRangeAt(0).cloneRange();
       let node = range.commonAncestorContainer;
       if (node.nodeType === 3) node = node.parentElement;
-      const host = node && node.closest
+      const ceHost = node && node.closest
         ? node.closest('[contenteditable=""],[contenteditable="true"]') : null;
-      return host
-        ? { kind: "editable", range, host, text }
+      return ceHost
+        ? { kind: "editable", range, host: ceHost, text }
         : { kind: "readonly", range, text };
     }
     return null;
   }
 
+  // Viewport-relative rect of the current selection (or the active field).
   function selectionRect() {
     const sel = window.getSelection();
     if (sel && sel.rangeCount && !sel.isCollapsed) {
       const r = sel.getRangeAt(0).getBoundingClientRect();
       if (r && r.width + r.height > 0) return r;
     }
-    const active = document.activeElement;
-    if (active && active.getBoundingClientRect) return active.getBoundingClientRect();
+    const a = document.activeElement;
+    if (a && a.getBoundingClientRect) {
+      const r = a.getBoundingClientRect();
+      if (r && r.width + r.height > 0) return r;
+    }
     return null;
   }
 
-  // --- Pill show/hide ---------------------------------------------------------
-  function showPill() {
+  // --- Pill -------------------------------------------------------------------
+  function showPillIfSelection() {
+    if (panel.style.display === "block") return;     // panel open → ignore
     const cap = captureSelection();
     if (!cap) { hidePill(); return; }
     const r = selectionRect();
     if (!r) { hidePill(); return; }
     target = cap;
     pill.style.display = "flex";
-    const x = window.scrollX + r.right;
-    const y = window.scrollY + r.bottom + 6;
-    pill.style.left = `${Math.min(x, window.scrollX + window.innerWidth - 80)}px`;
-    pill.style.top = `${y}px`;
+    const left = Math.min(r.right, window.innerWidth - 80);
+    const top = Math.min(r.bottom + 6, window.innerHeight - 36);
+    pill.style.left = Math.max(6, left) + "px";
+    pill.style.top = Math.max(6, top) + "px";
   }
   function hidePill() { pill.style.display = "none"; }
 
+  // Events — note: NO selectionchange listener (that was the lag source).
+  document.addEventListener("mousedown", (e) => {
+    // A new click/drag is starting. Clear the pill unless the click is on our UI.
+    if (!e.composedPath || !e.composedPath().includes(host)) hidePill();
+  }, true);
+
   document.addEventListener("mouseup", () => {
-    // Let the selection settle, but ignore clicks landing on our own UI.
-    setTimeout(() => { if (panel.style.display !== "block") showPill(); }, 10);
+    // Defer one tick so the browser finalizes the selection first.
+    setTimeout(showPillIfSelection, 0);
   });
-  document.addEventListener("selectionchange", () => {
-    const sel = window.getSelection();
-    if ((!sel || sel.isCollapsed) && panel.style.display !== "block"
-        && document.activeElement?.tagName !== "TEXTAREA"
-        && document.activeElement?.tagName !== "INPUT") {
-      hidePill();
-    }
-  });
+
+  // Hide stale UI on scroll (positions are viewport-fixed).
+  window.addEventListener("scroll", () => {
+    hidePill();
+    if (panel.style.display === "block") closePanel();
+  }, true);
 
   // Keyboard shortcut: Ctrl/Cmd + Shift + K
   document.addEventListener("keydown", (e) => {
-    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "k") {
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key && e.key.toLowerCase() === "k") {
       const cap = captureSelection();
       if (cap) { e.preventDefault(); target = cap; openPanel(); }
     }
@@ -200,13 +219,10 @@
 
     const r = selectionRect();
     panel.style.display = "block";
-    const px = Math.min(
-      window.scrollX + (r ? r.left : 60),
-      window.scrollX + window.innerWidth - 340
-    );
-    const py = window.scrollY + (r ? r.bottom + 6 : 60);
-    panel.style.left = `${Math.max(8, px)}px`;
-    panel.style.top = `${py}px`;
+    const left = Math.min(r ? r.left : 60, window.innerWidth - 340);
+    const top = Math.min(r ? r.bottom + 6 : 60, window.innerHeight - 230);
+    panel.style.left = Math.max(8, left) + "px";
+    panel.style.top = Math.max(8, top) + "px";
     setTimeout(() => instruction.focus(), 0);
   }
 
@@ -215,17 +231,14 @@
     target = null;
   }
 
-  function setStatus(msg, cls = "") {
+  function setStatus(msg, cls) {
     statusEl.className = "status" + (cls ? " " + cls : "");
     statusEl.innerHTML = msg;
   }
 
   presetSel.addEventListener("change", () => {
     const i = presetSel.value;
-    if (i !== "") {
-      instruction.value = presets[Number(i)].instruction;
-      instruction.focus();
-    }
+    if (i !== "") { instruction.value = presets[Number(i)].instruction; instruction.focus(); }
   });
 
   saveBtn.addEventListener("click", async () => {
@@ -234,7 +247,7 @@
     const name = prompt("Name this preset:", text.slice(0, 40));
     if (!name) return;
     presets = [...presets, { name: name.trim(), instruction: text }];
-    await chrome.storage.sync.set({ presets });
+    try { await chrome.storage.sync.set({ presets }); } catch (_) {}
     buildPresetOptions();
     presetSel.value = String(presets.length - 1);
     setStatus(`Saved preset “${name.trim()}”.`, "ok");
@@ -243,10 +256,8 @@
   cancelBtn.addEventListener("click", closePanel);
   pill.addEventListener("click", openPanel);
 
-  // Keep selection alive: don't let clicks inside our UI clear the page selection.
-  // Listen on the shadow root (not the host) so e.target is the real inner element
-  // — events are retargeted to the host for listeners outside the shadow tree.
-  // Skip the textarea and dropdown so the user can still focus/type/open them.
+  // Keep the page selection alive when clicking buttons inside our panel.
+  // Listen on the shadow root so e.target is the real inner element.
   root.addEventListener("mousedown", (e) => {
     if (e.target === instruction || e.target === presetSel) return;
     e.preventDefault();
@@ -273,30 +284,22 @@
         type: "rewrite", text: target.text, instruction: instr
       });
     } catch (e) {
-      resp = { error: "Extension link lost. Try reloading the page." };
+      resp = { error: "Extension link lost — reload the page and try again." };
     }
 
     goBtn.disabled = false;
 
-    if (!resp || resp.error) {
-      setStatus(resp ? resp.error : "Unknown error.", "err");
-      return;
-    }
+    if (!resp || resp.error) { setStatus(resp ? resp.error : "Unknown error.", "err"); return; }
 
     const applied = applyResult(resp.text);
-    if (applied === "replaced") {
-      setStatus("Done ✓", "ok");
-      setTimeout(closePanel, 500);
-    } else if (applied === "copied") {
-      setStatus("That text isn't editable — result copied to clipboard ✓", "ok");
-    }
+    if (applied === "replaced") { setStatus("Done ✓", "ok"); setTimeout(closePanel, 500); }
+    else { setStatus("That text isn't editable — result copied to clipboard ✓", "ok"); }
   }
 
   // --- Apply the rewrite ------------------------------------------------------
   function applyResult(newText) {
     if (target.kind === "input") {
-      const el = target.el;
-      const v = el.value;
+      const el = target.el, v = el.value;
       el.value = v.slice(0, target.start) + newText + v.slice(target.end);
       const caret = target.start + newText.length;
       try { el.setSelectionRange(target.start, caret); } catch (_) {}
@@ -312,10 +315,8 @@
       target.host.focus();
       // execCommand is deprecated but remains the most reliable way to edit
       // contenteditable surfaces (Gmail, Slack) — it fires the events they expect.
-      const ok = document.execCommand("insertText", false, newText);
-      if (ok) return "replaced";
+      if (document.execCommand("insertText", false, newText)) return "replaced";
     }
-    // Read-only (or contenteditable insert failed): fall back to clipboard.
     navigator.clipboard.writeText(newText).catch(() => {});
     return "copied";
   }
