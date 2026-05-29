@@ -38,11 +38,11 @@ $("pillEnabled").addEventListener("change", async () => {
 
 $("setPillPos").addEventListener("click", async () => {
   await chrome.storage.sync.set({ pillCalibrating: true });
-  flashPill("Now: open a web page, highlight text, drag the pill, then release.");
+  flashPill("Switch to a web page — a pill is now in the center. Drag it, then click Save position.");
 });
 
 $("resetPillPos").addEventListener("click", async () => {
-  await chrome.storage.sync.set({ pillOffset: null, pillCalibrating: false });
+  await chrome.storage.sync.set({ pillPos: null, pillCalibrating: false });
   flashPill("Pill position reset to default ✓");
 });
 

@@ -14,8 +14,19 @@ const SYSTEM_PROMPT = [
   "Return ONLY the rewritten text — no preamble, no explanation, no quotation marks,",
   "no markdown code fences, no 'Here is...'. Just the final text, ready to drop in place.",
   "Preserve the original language unless the instruction explicitly asks to translate.",
-  "Match the original formatting (line breaks, lists) unless asked otherwise."
+  "Match the original formatting (line breaks, lists) unless asked otherwise.",
+  "Never use em-dashes or en-dashes. Use commas, periods, colons, parentheses, or reword instead."
 ].join(" ");
+
+// Hard guarantee: strip em-dashes from the output, whatever the model did.
+// (En-dashes are left alone so number ranges like "5–10" survive; the system
+// prompt already tells the model to avoid them.)
+function stripEmDashes(s) {
+  return s
+    .replace(/\s*[—―]\s*/g, ", ")   // em dash / horizontal bar → ", "
+    .replace(/ {2,}/g, " ")
+    .replace(/\s+([,.;:!?])/g, "$1");          // tidy stray space before punctuation
+}
 
 // Default style presets, seeded on first install. Users can add/edit/delete them.
 // Bump PRESETS_VERSION when adding new defaults so existing installs get them
@@ -132,5 +143,5 @@ async function rewrite(text, instruction) {
     : "";
 
   if (!out.trim()) return { error: "Claude returned an empty result." };
-  return { text: out.trim() };
+  return { text: stripEmDashes(out.trim()) };
 }

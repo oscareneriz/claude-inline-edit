@@ -25,20 +25,21 @@
   let panelPinned = false;  // if true, reopen at panelPos instead of lower-right
   let panelPos = null;      // { left, top } the user pinned
   let pillEnabled = true;     // show the ✦ pill when text is highlighted
-  let pillOffset = null;      // { dx, dy } from the selection's bottom-right
+  let pillPos = null;         // { left, top } absolute viewport spot chosen by the user
   let pillCalibrating = false;// "set position" mode triggered from settings
   try {
     chrome.storage.sync.get(
       ["presets", "defaultPreset", "panelPinned", "panelPos",
-       "pillEnabled", "pillOffset", "pillCalibrating"],
+       "pillEnabled", "pillPos", "pillCalibrating"],
       (r) => {
         presets = (r && r.presets) || [];
         defaultPreset = (r && r.defaultPreset) || "";
         panelPinned = !!(r && r.panelPinned);
         panelPos = (r && r.panelPos) || null;
         pillEnabled = !(r && r.pillEnabled === false);   // default ON
-        pillOffset = (r && r.pillOffset) || null;
+        pillPos = (r && r.pillPos) || null;
         pillCalibrating = !!(r && r.pillCalibrating);
+        if (pillCalibrating) startCalibration();
       }
     );
     chrome.storage.onChanged.addListener((ch) => {
@@ -46,9 +47,15 @@
       if (ch.defaultPreset) defaultPreset = ch.defaultPreset.newValue || "";
       if (ch.panelPinned) panelPinned = !!ch.panelPinned.newValue;
       if (ch.panelPos) panelPos = ch.panelPos.newValue || null;
-      if (ch.pillEnabled) pillEnabled = ch.pillEnabled.newValue !== false;
-      if (ch.pillOffset) pillOffset = ch.pillOffset.newValue || null;
-      if (ch.pillCalibrating) pillCalibrating = !!ch.pillCalibrating.newValue;
+      if (ch.pillEnabled) {
+        pillEnabled = ch.pillEnabled.newValue !== false;
+        if (!pillEnabled) hidePill();          // hide it right away when turned off
+      }
+      if (ch.pillPos) pillPos = ch.pillPos.newValue || null;
+      if (ch.pillCalibrating) {
+        pillCalibrating = !!ch.pillCalibrating.newValue;
+        if (pillCalibrating) startCalibration(); else endCalibration();
+      }
     });
   } catch (_) {}
 
@@ -126,9 +133,22 @@
              border: 1px solid ${C.SEP}; }
       .orig { background: ${C.BG2}; color: ${C.FG2}; }
       .neww { background: #fff; color: ${C.FG}; border-color: ${C.ACT}; }
+      .calbar { position: fixed; display: none; pointer-events: auto;
+                left: 50%; top: 16px; transform: translateX(-50%);
+                align-items: center; gap: 8px; padding: 9px 12px;
+                background: ${C.BG}; border: 1px solid ${C.SEP}; border-radius: 12px;
+                box-shadow: 0 8px 28px rgba(0,0,0,.28); color: ${C.FG}; }
+      .caltext { font-size: 13px; font-weight: 600; color: ${C.FG2}; }
+      .calbar .btn { flex: 0 0 auto; }
     </style>
 
     <div class="pill" id="pill">✦ Edit</div>
+
+    <div class="calbar" id="calbar">
+      <span class="caltext">Drag the ✦ pill where you want it, then</span>
+      <button class="btn btn-primary" id="calSave">Save position</button>
+      <button class="btn btn-ghost" id="calCancel">Cancel</button>
+    </div>
 
     <div class="panel" id="panel">
       <div class="head" id="head">
@@ -182,6 +202,9 @@
   const head = root.getElementById("head");
   const pinBtn = root.getElementById("pin");
   const closeBtn = root.getElementById("close");
+  const calbar = root.getElementById("calbar");
+  const calSave = root.getElementById("calSave");
+  const calCancel = root.getElementById("calCancel");
 
   // The selection we'll act on, captured before the panel steals focus.
   let target = null;
@@ -232,27 +255,33 @@
   // --- Pill -------------------------------------------------------------------
   function showPillIfSelection() {
     if (panel.style.display === "block") return;     // panel open → ignore
-    if (!pillEnabled && !pillCalibrating) { hidePill(); return; }  // pill turned off
+    if (pillCalibrating) return;                      // calibration controls the pill
+    if (!pillEnabled) { hidePill(); return; }         // pill turned off
     const cap = captureSelection();
     if (!cap) { hidePill(); return; }
     const r = selectionRect();
     if (!r) { hidePill(); return; }
     target = cap;
-    pill.textContent = pillCalibrating ? "⠿ Drag me" : "✦ Edit";
-    pill.style.cursor = pillCalibrating ? "grab" : "pointer";
+    pill.textContent = "✦ Edit";
+    pill.style.cursor = "pointer";
     pill.style.display = "flex";
-    // Position relative to the selection's bottom-right, plus the saved offset.
-    const dx = pillOffset ? pillOffset.dx : 0;
-    const dy = pillOffset ? pillOffset.dy : 6;
-    const left = Math.min(r.right + dx, window.innerWidth - 80);
-    const top = Math.min(r.bottom + dy, window.innerHeight - 36);
-    pill.style.left = Math.max(6, left) + "px";
-    pill.style.top = Math.max(6, top) + "px";
+    if (pillPos) {
+      // Fixed spot the user chose during calibration.
+      const left = Math.min(pillPos.left, window.innerWidth - 80);
+      const top = Math.min(pillPos.top, window.innerHeight - 36);
+      pill.style.left = Math.max(6, left) + "px";
+      pill.style.top = Math.max(6, top) + "px";
+    } else {
+      // Default: just below-right of the selection.
+      pill.style.left = Math.max(6, Math.min(r.right, window.innerWidth - 80)) + "px";
+      pill.style.top = Math.max(6, Math.min(r.bottom + 6, window.innerHeight - 36)) + "px";
+    }
   }
   function hidePill() { pill.style.display = "none"; }
 
   // Events — note: NO selectionchange listener (that was the lag source).
   document.addEventListener("mousedown", (e) => {
+    if (pillCalibrating) return;                       // keep the pill during calibration
     // A new click/drag is starting. Clear the pill unless the click is on our UI.
     if (!e.composedPath || !e.composedPath().includes(host)) hidePill();
   }, true);
@@ -264,6 +293,7 @@
 
   // Hide stale UI on scroll (positions are viewport-fixed).
   window.addEventListener("scroll", () => {
+    if (pillCalibrating) return;
     hidePill();
     if (panel.style.display === "block") closePanel();
   }, true);
@@ -450,8 +480,35 @@
   });
 
   // --- Calibrate the pill position ("Set pill position" in settings) ---------
-  // While calibrating, the pill becomes draggable; on release we save its offset
-  // from the selection so it always appears there relative to future highlights.
+  // Shows the pill in the page center with a Save/Cancel bar. The user drags the
+  // pill anywhere and clicks Save; the chosen spot becomes the pill's fixed
+  // viewport position for every future highlight.
+  function startCalibration() {
+    if (!calbar || document.visibilityState !== "visible") return;
+    pill.textContent = "✦ Edit";
+    pill.style.cursor = "grab";
+    pill.style.display = "flex";
+    const w = pill.offsetWidth || 70, h = pill.offsetHeight || 30;
+    if (pillPos) {
+      pill.style.left = pillPos.left + "px";
+      pill.style.top = pillPos.top + "px";
+    } else {
+      pill.style.left = Math.round(window.innerWidth / 2 - w / 2) + "px";
+      pill.style.top = Math.round(window.innerHeight / 2 - h / 2) + "px";
+    }
+    calbar.style.display = "flex";
+  }
+  function endCalibration() {
+    if (calbar) calbar.style.display = "none";
+    pill.style.cursor = "pointer";
+    hidePill();
+  }
+  // If the page was in the background when calibration was armed, start it when
+  // the user switches to this tab.
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && pillCalibrating) startCalibration();
+  });
+
   let pillDrag = null;
   pill.addEventListener("mousedown", (e) => {
     if (!pillCalibrating) return;          // normal mode: click opens the panel
@@ -474,20 +531,23 @@
     pill.style.top = nt + "px";
   });
   window.addEventListener("mouseup", () => {
-    if (!pillDrag) return;
-    pillDrag = null;
-    const r = selectionRect();
-    if (r) {
-      pillOffset = {
-        dx: (parseFloat(pill.style.left) || 0) - r.right,
-        dy: (parseFloat(pill.style.top) || 0) - r.bottom
-      };
-    }
+    if (pillDrag) { pillDrag = null; pill.style.cursor = "grab"; }
+  });
+
+  calSave.addEventListener("click", () => {
+    const pos = {
+      left: parseFloat(pill.style.left) || 0,
+      top: parseFloat(pill.style.top) || 0
+    };
+    pillPos = pos;
     pillCalibrating = false;
-    try { chrome.storage.sync.set({ pillOffset, pillCalibrating: false }); } catch (_) {}
-    pill.textContent = "Saved ✓";
-    pill.style.cursor = "pointer";
-    setTimeout(() => { pill.textContent = "✦ Edit"; hidePill(); }, 900);
+    try { chrome.storage.sync.set({ pillPos: pos, pillCalibrating: false }); } catch (_) {}
+    endCalibration();
+  });
+  calCancel.addEventListener("click", () => {
+    pillCalibrating = false;
+    try { chrome.storage.sync.set({ pillCalibrating: false }); } catch (_) {}
+    endCalibration();
   });
 
   instruction.addEventListener("keydown", (e) => {
