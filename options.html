@@ -105,6 +105,28 @@
     </div>
 
     <div class="card">
+      <h2>Window size</h2>
+      <div class="hint" style="margin-top:-2px;">Resize the popup by dragging its <b>bottom-right corner</b> — the size is saved for whichever mode is active. Use the <b>⤢</b> button in the popup header to switch Small / Big. (Opens Small by default.)</div>
+
+      <label class="switch" style="margin-top:14px;">
+        <input type="checkbox" id="sizeAdaptive" />
+        <span class="track"><span class="thumb"></span></span>
+        <span>Adaptive — grow to fit content (up to the max below)</span>
+      </label>
+
+      <div class="row" style="margin-top:14px; gap:14px;">
+        <div><label for="maxW">Max width (px)</label><input id="maxW" type="number" min="240" step="10" /></div>
+        <div><label for="maxH">Max height (px)</label><input id="maxH" type="number" min="120" step="10" /></div>
+      </div>
+
+      <div class="saverow" style="margin-top:14px;">
+        <button class="btn btn-primary" id="saveSize">Save</button>
+        <button class="btn btn-ghost" id="resetSize">Reset sizes</button>
+        <span id="sizeStatus"></span>
+      </div>
+    </div>
+
+    <div class="card">
       <h2>Connection</h2>
       <label for="apiKey">Anthropic API key</label>
       <input id="apiKey" type="password" placeholder="sk-ant-…" autocomplete="off" />

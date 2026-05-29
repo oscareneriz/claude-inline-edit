@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Claude Inline Edit",
-  "version": "1.6.2",
+  "version": "1.7.0",
   "description": "Highlight any text, tell Claude how to change it, and it rewrites it right where it is.",
   "permissions": ["storage", "clipboardWrite", "tabs"],
   "host_permissions": ["https://api.anthropic.com/*"],

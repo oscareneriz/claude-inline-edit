@@ -28,10 +28,17 @@
   let pillPos = null;         // { left, top } absolute viewport spot chosen by the user
   let pillCalibrating = false;// "set position" mode triggered from settings
   let formatMode = "plain";   // "plain" = strip markdown, "rich" = render **bold**
+  // Window sizing
+  let sizeSmall = { w: 320, h: 240 };
+  let sizeBig = { w: 480, h: 440 };
+  let sizeMax = { w: 600, h: 640 };
+  let sizeAdaptive = false;    // grow to fit content (capped by sizeMax)
+  let sizeCurrent = "small";   // which preset is active this session (always opens small)
   try {
     chrome.storage.sync.get(
       ["presets", "defaultPreset", "panelPinned", "panelPos",
-       "pillEnabled", "pillPos", "pillCalibrating", "formatMode"],
+       "pillEnabled", "pillPos", "pillCalibrating", "formatMode",
+       "sizeSmall", "sizeBig", "sizeMax", "sizeAdaptive"],
       (r) => {
         presets = (r && r.presets) || [];
         defaultPreset = (r && r.defaultPreset) || "";
@@ -41,6 +48,10 @@
         pillPos = (r && r.pillPos) || null;
         pillCalibrating = !!(r && r.pillCalibrating);
         formatMode = (r && r.formatMode) || "plain";
+        if (r && r.sizeSmall) sizeSmall = r.sizeSmall;
+        if (r && r.sizeBig) sizeBig = r.sizeBig;
+        if (r && r.sizeMax) sizeMax = r.sizeMax;
+        sizeAdaptive = !!(r && r.sizeAdaptive);
         if (pillCalibrating) startCalibration();
       }
     );
@@ -59,6 +70,12 @@
         if (pillCalibrating) startCalibration(); else endCalibration();
       }
       if (ch.formatMode) { formatMode = ch.formatMode.newValue || "plain"; updateFmtButtons(); }
+      if (ch.sizeSmall && ch.sizeSmall.newValue) sizeSmall = ch.sizeSmall.newValue;
+      if (ch.sizeBig && ch.sizeBig.newValue) sizeBig = ch.sizeBig.newValue;
+      if (ch.sizeMax && ch.sizeMax.newValue) sizeMax = ch.sizeMax.newValue;
+      if (ch.sizeAdaptive) sizeAdaptive = !!ch.sizeAdaptive.newValue;
+      if ((ch.sizeSmall || ch.sizeBig || ch.sizeMax || ch.sizeAdaptive)
+          && panel.style.display === "block") { applyPanelSize(); clampIntoView(); }
     });
   } catch (_) {}
 
@@ -111,7 +128,11 @@
         display: none; width: 320px; padding: 12px;
         background: ${C.BG}; border: 1px solid ${C.SEP}; border-radius: 12px;
         box-shadow: 0 8px 28px rgba(0,0,0,.28); color: ${C.FG};
+        min-width: 240px; min-height: 140px; overflow: hidden;
       }
+      .sizebtn { cursor: pointer; color: ${C.FG3}; font-size: 15px; line-height: 1;
+                 padding: 2px 6px; border-radius: 6px; display: inline-block; }
+      .sizebtn:hover { background: ${C.BG3}; color: ${C.FG}; }
       .head { display: flex; align-items: center; justify-content: space-between;
               margin: -2px 0 9px; cursor: move; user-select: none; }
       .title { font-size: 12px; font-weight: 700; color: ${C.FG2}; letter-spacing: .03em; }
@@ -160,8 +181,8 @@
               border: 2px solid ${C.SEP}; border-top-color: ${C.ACT};
               border-radius: 50%; animation: sp .7s linear infinite; margin-right: 6px; }
       @keyframes sp { to { transform: rotate(360deg); } }
-      .box { font-size: 13px; border-radius: 8px; padding: 8px 9px; max-height: 110px;
-             overflow: auto; white-space: pre-wrap; word-break: break-word;
+      .box { font-size: 13px; border-radius: 8px; padding: 8px 9px;
+             white-space: pre-wrap; word-break: break-word;
              border: 1px solid ${C.SEP}; }
       .orig { background: ${C.BG2}; color: ${C.FG2}; }
       .neww { background: #fff; color: ${C.FG}; border-color: ${C.ACT}; }
@@ -186,6 +207,7 @@
       <div class="head" id="head">
         <span class="title">✦ Claude Inline Edit</span>
         <span class="headbtns">
+          <span class="sizebtn" id="sizeBtn" title="Bigger">⤢</span>
           <span class="pin" id="pin" title="Pin the panel to this spot">📌</span>
           <span class="close" id="close" title="Close">✕</span>
           <span class="grip" id="grip" title="Drag to move">⠿</span>
@@ -237,6 +259,7 @@
   const applyBtn = root.getElementById("apply");
   const backBtn = root.getElementById("back");
   const head = root.getElementById("head");
+  const sizeBtn = root.getElementById("sizeBtn");
   const pinBtn = root.getElementById("pin");
   const closeBtn = root.getElementById("close");
   const calbar = root.getElementById("calbar");
@@ -392,6 +415,8 @@
     preview.style.display = "none";
 
     panel.style.display = "block";
+    sizeCurrent = "small";           // always open at the small size
+    applyPanelSize();
     applyDefaultPreset();            // preselect the user's default preset, if any
     updateFmtButtons();
     pinBtn.classList.toggle("on", panelPinned);
@@ -486,6 +511,63 @@
   fmtPlainBtn2.addEventListener("click", () => setFmtMode("plain"));
   fmtBoldBtn2.addEventListener("click", () => setFmtMode("rich"));
 
+  // --- Window size (Small / Big / Adaptive) ----------------------------------
+  let applyingSize = false;
+  let saveSizeTimer = null;
+
+  function applyPanelSize() {
+    applyingSize = true;
+    if (sizeAdaptive) {
+      const maxW = Math.min(sizeMax.w, window.innerWidth - 16);
+      const maxH = Math.min(sizeMax.h, window.innerHeight - 16);
+      panel.style.resize = "none";
+      panel.style.overflow = "auto";
+      panel.style.height = "auto";
+      panel.style.maxHeight = maxH + "px";
+      panel.style.width = Math.min(sizeBig.w, maxW) + "px";
+    } else {
+      const s = (sizeCurrent === "big") ? sizeBig : sizeSmall;
+      panel.style.resize = "both";
+      panel.style.overflow = "auto";
+      panel.style.maxHeight = "";
+      panel.style.width = Math.min(s.w, window.innerWidth - 16) + "px";
+      panel.style.height = Math.min(s.h, window.innerHeight - 16) + "px";
+    }
+    updateSizeBtn();
+    setTimeout(() => { applyingSize = false; }, 160);
+  }
+
+  function updateSizeBtn() {
+    if (!sizeBtn) return;
+    sizeBtn.style.display = sizeAdaptive ? "none" : "inline-block";
+    sizeBtn.textContent = (sizeCurrent === "big") ? "⤡" : "⤢";
+    sizeBtn.title = (sizeCurrent === "big") ? "Smaller" : "Bigger";
+  }
+
+  sizeBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    sizeCurrent = (sizeCurrent === "big") ? "small" : "big";
+    applyPanelSize();
+    clampIntoView();
+  });
+
+  // Persist a manual corner-resize into the currently-active size preset.
+  try {
+    const ro = new ResizeObserver(() => {
+      if (applyingSize || sizeAdaptive) return;
+      if (panel.style.display !== "block") return;
+      const w = Math.round(panel.offsetWidth), h = Math.round(panel.offsetHeight);
+      if (!w || !h) return;
+      clearTimeout(saveSizeTimer);
+      saveSizeTimer = setTimeout(() => {
+        const val = { w, h };
+        if (sizeCurrent === "big") { sizeBig = val; try { chrome.storage.sync.set({ sizeBig: val }); } catch (_) {} }
+        else { sizeSmall = val; try { chrome.storage.sync.set({ sizeSmall: val }); } catch (_) {} }
+      }, 450);
+    });
+    ro.observe(panel);
+  } catch (_) {}
+
   // Keep the page selection alive when clicking buttons inside our panel.
   // Listen on the shadow root so e.target is the real inner element.
   root.addEventListener("mousedown", (e) => {
@@ -496,7 +578,7 @@
   // --- Drag the panel by its header ------------------------------------------
   let drag = null;
   head.addEventListener("mousedown", (e) => {
-    if (e.target === pinBtn || e.target === closeBtn) return;   // let buttons get their click
+    if (e.target === pinBtn || e.target === closeBtn || e.target === sizeBtn) return;  // let buttons get their click
     drag = {
       x: e.clientX, y: e.clientY,
       left: parseFloat(panel.style.left) || 0,

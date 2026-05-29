@@ -46,6 +46,48 @@ $("resetPillPos").addEventListener("click", async () => {
   flashPill("Pill position reset to default ✓");
 });
 
+// --- Window size --------------------------------------------------------------
+const SIZE_DEFAULTS = {
+  sizeSmall: { w: 320, h: 240 },
+  sizeBig: { w: 480, h: 440 },
+  sizeMax: { w: 600, h: 640 }
+};
+
+function flashSize(msg, ok = true) {
+  const s = $("sizeStatus");
+  s.textContent = msg;
+  s.style.cssText = `font-size:13px;font-weight:600;color:${ok ? "var(--grn)" : "var(--red)"};`;
+  setTimeout(() => { s.textContent = ""; }, 3000);
+}
+
+chrome.storage.sync.get(["sizeAdaptive", "sizeMax"], (r) => {
+  $("sizeAdaptive").checked = !!r.sizeAdaptive;
+  const max = r.sizeMax || SIZE_DEFAULTS.sizeMax;
+  $("maxW").value = max.w;
+  $("maxH").value = max.h;
+});
+
+$("sizeAdaptive").addEventListener("change", async () => {
+  await chrome.storage.sync.set({ sizeAdaptive: $("sizeAdaptive").checked });
+  flashSize($("sizeAdaptive").checked ? "Adaptive on ✓" : "Adaptive off — using Small/Big");
+});
+
+$("saveSize").addEventListener("click", async () => {
+  const w = Math.max(240, parseInt($("maxW").value, 10) || SIZE_DEFAULTS.sizeMax.w);
+  const h = Math.max(120, parseInt($("maxH").value, 10) || SIZE_DEFAULTS.sizeMax.h);
+  $("maxW").value = w;
+  $("maxH").value = h;
+  await chrome.storage.sync.set({ sizeMax: { w, h } });
+  flashSize("Saved ✓");
+});
+
+$("resetSize").addEventListener("click", async () => {
+  await chrome.storage.sync.set({ ...SIZE_DEFAULTS });
+  $("maxW").value = SIZE_DEFAULTS.sizeMax.w;
+  $("maxH").value = SIZE_DEFAULTS.sizeMax.h;
+  flashSize("Sizes reset to defaults ✓");
+});
+
 // --- Connection (key + model) -------------------------------------------------
 $("saveConn").addEventListener("click", async () => {
   const apiKey = $("apiKey").value.trim();
