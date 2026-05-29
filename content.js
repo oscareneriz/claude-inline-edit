@@ -198,11 +198,6 @@
           <button class="btn btn-ghost save" id="save" title="Save the box below as a new preset">＋</button>
         </div>
         <textarea id="instruction" placeholder="Tell Claude how to change the selected text…"></textarea>
-        <div class="fmtrow">
-          <span class="fmtlabel">Insert as</span>
-          <button class="btn fmtbtn" id="fmtPlain">Plain text</button>
-          <button class="btn fmtbtn" id="fmtBold">Bold</button>
-        </div>
         <div class="foot">
           <button class="btn btn-primary" id="go">Rewrite</button>
           <button class="btn btn-ghost" id="cancel">Esc</button>
@@ -247,8 +242,6 @@
   const calbar = root.getElementById("calbar");
   const calSave = root.getElementById("calSave");
   const calCancel = root.getElementById("calCancel");
-  const fmtPlainBtn = root.getElementById("fmtPlain");
-  const fmtBoldBtn = root.getElementById("fmtBold");
   const fmtPlainBtn2 = root.getElementById("fmtPlain2");
   const fmtBoldBtn2 = root.getElementById("fmtBold2");
 
@@ -476,8 +469,8 @@
   // --- Plain / Bold formatting toggle ----------------------------------------
   function updateFmtButtons() {
     const isRich = formatMode === "rich";
-    [fmtPlainBtn, fmtPlainBtn2].forEach((b) => b && b.classList.toggle("active", !isRich));
-    [fmtBoldBtn, fmtBoldBtn2].forEach((b) => b && b.classList.toggle("active", isRich));
+    if (fmtPlainBtn2) fmtPlainBtn2.classList.toggle("active", !isRich);
+    if (fmtBoldBtn2) fmtBoldBtn2.classList.toggle("active", isRich);
   }
   function renderPreviewAfter() {
     if (pendingText == null) return;
@@ -490,8 +483,6 @@
     try { chrome.storage.sync.set({ formatMode: mode }); } catch (_) {}
     if (preview.style.display === "block") renderPreviewAfter();   // re-render live
   }
-  fmtPlainBtn.addEventListener("click", () => setFmtMode("plain"));
-  fmtBoldBtn.addEventListener("click", () => setFmtMode("rich"));
   fmtPlainBtn2.addEventListener("click", () => setFmtMode("plain"));
   fmtBoldBtn2.addEventListener("click", () => setFmtMode("rich"));
 
