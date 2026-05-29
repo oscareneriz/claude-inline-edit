@@ -22,14 +22,20 @@
 
   let presets = [];
   let defaultPreset = "";   // name of the preset preselected when the panel opens
+  let panelPinned = false;  // if true, reopen at panelPos instead of lower-right
+  let panelPos = null;      // { left, top } the user pinned
   try {
-    chrome.storage.sync.get(["presets", "defaultPreset"], (r) => {
+    chrome.storage.sync.get(["presets", "defaultPreset", "panelPinned", "panelPos"], (r) => {
       presets = (r && r.presets) || [];
       defaultPreset = (r && r.defaultPreset) || "";
+      panelPinned = !!(r && r.panelPinned);
+      panelPos = (r && r.panelPos) || null;
     });
     chrome.storage.onChanged.addListener((ch) => {
       if (ch.presets) presets = ch.presets.newValue || [];
       if (ch.defaultPreset) defaultPreset = ch.defaultPreset.newValue || "";
+      if (ch.panelPinned) panelPinned = !!ch.panelPinned.newValue;
+      if (ch.panelPos) panelPos = ch.panelPos.newValue || null;
     });
   } catch (_) {}
 
@@ -63,6 +69,11 @@
       .head { display: flex; align-items: center; justify-content: space-between;
               margin: -2px 0 9px; cursor: move; user-select: none; }
       .title { font-size: 12px; font-weight: 700; color: ${C.FG2}; letter-spacing: .03em; }
+      .headbtns { display: flex; align-items: center; gap: 2px; }
+      .pin { cursor: pointer; font-size: 13px; line-height: 1; padding: 3px 5px;
+             border-radius: 6px; filter: grayscale(1) opacity(.55); }
+      .pin:hover { background: ${C.BG3}; filter: grayscale(.4) opacity(.9); }
+      .pin.on { filter: none; background: ${C.BG3}; }
       .grip { cursor: move; color: ${C.FG3}; font-size: 15px; line-height: 1;
               padding: 2px 7px; border-radius: 6px; }
       .grip:hover { background: ${C.BG3}; color: ${C.FG}; }
@@ -106,7 +117,10 @@
     <div class="panel" id="panel">
       <div class="head" id="head">
         <span class="title">✦ Claude Inline Edit</span>
-        <span class="grip" id="grip" title="Drag to move">⠿</span>
+        <span class="headbtns">
+          <span class="pin" id="pin" title="Pin the panel to this spot">📌</span>
+          <span class="grip" id="grip" title="Drag to move">⠿</span>
+        </span>
       </div>
       <div id="editor">
         <div class="label">Style preset</div>
@@ -149,6 +163,7 @@
   const applyBtn = root.getElementById("apply");
   const backBtn = root.getElementById("back");
   const head = root.getElementById("head");
+  const pinBtn = root.getElementById("pin");
 
   // The selection we'll act on, captured before the panel steals focus.
   let target = null;
@@ -285,12 +300,32 @@
 
     panel.style.display = "block";
     applyDefaultPreset();            // preselect the user's default preset, if any
+    pinBtn.classList.toggle("on", panelPinned);
 
-    // Always spawn near the top-right corner of the viewport.
-    const w = panel.offsetWidth || 320;
-    panel.style.left = Math.max(8, window.innerWidth - w - 14) + "px";
-    panel.style.top = "14px";
+    if (panelPinned && panelPos) {
+      // Reopen exactly where the user pinned it.
+      panel.style.left = panelPos.left + "px";
+      panel.style.top = panelPos.top + "px";
+      clampIntoView();
+    } else {
+      // Default: spawn near the lower-right corner of the viewport.
+      const w = panel.offsetWidth || 320;
+      const h = panel.offsetHeight || 220;
+      panel.style.left = Math.max(8, window.innerWidth - w - 16) + "px";
+      panel.style.top = Math.max(8, window.innerHeight - h - 16) + "px";
+    }
     setTimeout(() => instruction.focus(), 0);
+  }
+
+  // Keep the panel fully on-screen (used after its height changes, e.g. preview).
+  function clampIntoView() {
+    const w = panel.offsetWidth || 320, h = panel.offsetHeight || 220;
+    let l = parseFloat(panel.style.left) || 0;
+    let t = parseFloat(panel.style.top) || 0;
+    l = Math.max(8, Math.min(l, window.innerWidth - w - 8));
+    t = Math.max(8, Math.min(t, window.innerHeight - h - 8));
+    panel.style.left = l + "px";
+    panel.style.top = t + "px";
   }
 
   // Preselect the default preset (by name) and load its instruction text.
@@ -346,6 +381,7 @@
   // --- Drag the panel by its header ------------------------------------------
   let drag = null;
   head.addEventListener("mousedown", (e) => {
+    if (e.target === pinBtn) return;   // let the pin button receive its click
     drag = {
       x: e.clientX, y: e.clientY,
       left: parseFloat(panel.style.left) || 0,
@@ -362,7 +398,31 @@
     panel.style.left = nl + "px";
     panel.style.top = nt + "px";
   });
-  window.addEventListener("mouseup", () => { drag = null; });
+  window.addEventListener("mouseup", () => {
+    // If pinned, dragging updates the saved spot.
+    if (drag && panelPinned) {
+      panelPos = { left: parseFloat(panel.style.left) || 0, top: parseFloat(panel.style.top) || 0 };
+      try { chrome.storage.sync.set({ panelPos }); } catch (_) {}
+    }
+    drag = null;
+  });
+
+  // --- Pin / unpin the panel position ----------------------------------------
+  pinBtn.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    panelPinned = !panelPinned;
+    pinBtn.classList.toggle("on", panelPinned);
+    try {
+      if (panelPinned) {
+        panelPos = { left: parseFloat(panel.style.left) || 0, top: parseFloat(panel.style.top) || 0 };
+        await chrome.storage.sync.set({ panelPinned: true, panelPos });
+        setStatus("Pinned here — opens here from now on ✓", "ok");
+      } else {
+        await chrome.storage.sync.set({ panelPinned: false });
+        setStatus("Unpinned — opens in the lower-right.");
+      }
+    } catch (_) {}
+  });
 
   instruction.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); run(); }
@@ -399,6 +459,7 @@
     editor.style.display = "none";
     preview.style.display = "block";
     setStatus("Review the change, then Apply.");
+    clampIntoView();                 // preview is taller — keep it on-screen
   }
 
   applyBtn.addEventListener("click", () => {
