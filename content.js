@@ -24,18 +24,31 @@
   let defaultPreset = "";   // name of the preset preselected when the panel opens
   let panelPinned = false;  // if true, reopen at panelPos instead of lower-right
   let panelPos = null;      // { left, top } the user pinned
+  let pillEnabled = true;     // show the ✦ pill when text is highlighted
+  let pillOffset = null;      // { dx, dy } from the selection's bottom-right
+  let pillCalibrating = false;// "set position" mode triggered from settings
   try {
-    chrome.storage.sync.get(["presets", "defaultPreset", "panelPinned", "panelPos"], (r) => {
-      presets = (r && r.presets) || [];
-      defaultPreset = (r && r.defaultPreset) || "";
-      panelPinned = !!(r && r.panelPinned);
-      panelPos = (r && r.panelPos) || null;
-    });
+    chrome.storage.sync.get(
+      ["presets", "defaultPreset", "panelPinned", "panelPos",
+       "pillEnabled", "pillOffset", "pillCalibrating"],
+      (r) => {
+        presets = (r && r.presets) || [];
+        defaultPreset = (r && r.defaultPreset) || "";
+        panelPinned = !!(r && r.panelPinned);
+        panelPos = (r && r.panelPos) || null;
+        pillEnabled = !(r && r.pillEnabled === false);   // default ON
+        pillOffset = (r && r.pillOffset) || null;
+        pillCalibrating = !!(r && r.pillCalibrating);
+      }
+    );
     chrome.storage.onChanged.addListener((ch) => {
       if (ch.presets) presets = ch.presets.newValue || [];
       if (ch.defaultPreset) defaultPreset = ch.defaultPreset.newValue || "";
       if (ch.panelPinned) panelPinned = !!ch.panelPinned.newValue;
       if (ch.panelPos) panelPos = ch.panelPos.newValue || null;
+      if (ch.pillEnabled) pillEnabled = ch.pillEnabled.newValue !== false;
+      if (ch.pillOffset) pillOffset = ch.pillOffset.newValue || null;
+      if (ch.pillCalibrating) pillCalibrating = !!ch.pillCalibrating.newValue;
     });
   } catch (_) {}
 
@@ -74,6 +87,9 @@
              border-radius: 6px; filter: grayscale(1) opacity(.55); }
       .pin:hover { background: ${C.BG3}; filter: grayscale(.4) opacity(.9); }
       .pin.on { filter: none; background: ${C.BG3}; }
+      .close { cursor: pointer; color: ${C.FG3}; font-size: 13px; line-height: 1;
+               padding: 3px 7px; border-radius: 6px; }
+      .close:hover { background: ${C.RED}; color: #fff; }
       .grip { cursor: move; color: ${C.FG3}; font-size: 15px; line-height: 1;
               padding: 2px 7px; border-radius: 6px; }
       .grip:hover { background: ${C.BG3}; color: ${C.FG}; }
@@ -119,6 +135,7 @@
         <span class="title">✦ Claude Inline Edit</span>
         <span class="headbtns">
           <span class="pin" id="pin" title="Pin the panel to this spot">📌</span>
+          <span class="close" id="close" title="Close">✕</span>
           <span class="grip" id="grip" title="Drag to move">⠿</span>
         </span>
       </div>
@@ -164,6 +181,7 @@
   const backBtn = root.getElementById("back");
   const head = root.getElementById("head");
   const pinBtn = root.getElementById("pin");
+  const closeBtn = root.getElementById("close");
 
   // The selection we'll act on, captured before the panel steals focus.
   let target = null;
@@ -214,14 +232,20 @@
   // --- Pill -------------------------------------------------------------------
   function showPillIfSelection() {
     if (panel.style.display === "block") return;     // panel open → ignore
+    if (!pillEnabled && !pillCalibrating) { hidePill(); return; }  // pill turned off
     const cap = captureSelection();
     if (!cap) { hidePill(); return; }
     const r = selectionRect();
     if (!r) { hidePill(); return; }
     target = cap;
+    pill.textContent = pillCalibrating ? "⠿ Drag me" : "✦ Edit";
+    pill.style.cursor = pillCalibrating ? "grab" : "pointer";
     pill.style.display = "flex";
-    const left = Math.min(r.right, window.innerWidth - 80);
-    const top = Math.min(r.bottom + 6, window.innerHeight - 36);
+    // Position relative to the selection's bottom-right, plus the saved offset.
+    const dx = pillOffset ? pillOffset.dx : 0;
+    const dy = pillOffset ? pillOffset.dy : 6;
+    const left = Math.min(r.right + dx, window.innerWidth - 80);
+    const top = Math.min(r.bottom + dy, window.innerHeight - 36);
     pill.style.left = Math.max(6, left) + "px";
     pill.style.top = Math.max(6, top) + "px";
   }
@@ -369,7 +393,8 @@
   });
 
   cancelBtn.addEventListener("click", closePanel);
-  pill.addEventListener("click", openPanel);
+  closeBtn.addEventListener("click", (e) => { e.stopPropagation(); closePanel(); });
+  pill.addEventListener("click", () => { if (!pillCalibrating) openPanel(); });
 
   // Keep the page selection alive when clicking buttons inside our panel.
   // Listen on the shadow root so e.target is the real inner element.
@@ -381,7 +406,7 @@
   // --- Drag the panel by its header ------------------------------------------
   let drag = null;
   head.addEventListener("mousedown", (e) => {
-    if (e.target === pinBtn) return;   // let the pin button receive its click
+    if (e.target === pinBtn || e.target === closeBtn) return;   // let buttons get their click
     drag = {
       x: e.clientX, y: e.clientY,
       left: parseFloat(panel.style.left) || 0,
@@ -422,6 +447,47 @@
         setStatus("Unpinned — opens in the lower-right.");
       }
     } catch (_) {}
+  });
+
+  // --- Calibrate the pill position ("Set pill position" in settings) ---------
+  // While calibrating, the pill becomes draggable; on release we save its offset
+  // from the selection so it always appears there relative to future highlights.
+  let pillDrag = null;
+  pill.addEventListener("mousedown", (e) => {
+    if (!pillCalibrating) return;          // normal mode: click opens the panel
+    pillDrag = {
+      x: e.clientX, y: e.clientY,
+      left: parseFloat(pill.style.left) || 0,
+      top: parseFloat(pill.style.top) || 0
+    };
+    pill.style.cursor = "grabbing";
+    e.preventDefault();
+    e.stopPropagation();
+  });
+  window.addEventListener("mousemove", (e) => {
+    if (!pillDrag) return;
+    let nl = pillDrag.left + (e.clientX - pillDrag.x);
+    let nt = pillDrag.top + (e.clientY - pillDrag.y);
+    nl = Math.max(2, Math.min(nl, window.innerWidth - 40));
+    nt = Math.max(2, Math.min(nt, window.innerHeight - 24));
+    pill.style.left = nl + "px";
+    pill.style.top = nt + "px";
+  });
+  window.addEventListener("mouseup", () => {
+    if (!pillDrag) return;
+    pillDrag = null;
+    const r = selectionRect();
+    if (r) {
+      pillOffset = {
+        dx: (parseFloat(pill.style.left) || 0) - r.right,
+        dy: (parseFloat(pill.style.top) || 0) - r.bottom
+      };
+    }
+    pillCalibrating = false;
+    try { chrome.storage.sync.set({ pillOffset, pillCalibrating: false }); } catch (_) {}
+    pill.textContent = "Saved ✓";
+    pill.style.cursor = "pointer";
+    setTimeout(() => { pill.textContent = "✦ Edit"; hidePill(); }, 900);
   });
 
   instruction.addEventListener("keydown", (e) => {

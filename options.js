@@ -14,12 +14,36 @@ function flash(msg, ok = true) {
 }
 
 // --- Load existing settings ---------------------------------------------------
-chrome.storage.sync.get(["apiKey", "model", "presets", "defaultPreset"], (r) => {
+chrome.storage.sync.get(["apiKey", "model", "presets", "defaultPreset", "pillEnabled"], (r) => {
   if (r.apiKey) $("apiKey").value = r.apiKey;
   $("model").value = r.model || DEFAULT_MODEL;
   presets = r.presets || [];
   defaultPreset = r.defaultPreset || "";
+  $("pillEnabled").checked = r.pillEnabled !== false;   // default ON
   renderPresets();
+});
+
+// --- Highlight pill -----------------------------------------------------------
+function flashPill(msg, ok = true) {
+  const s = $("pillStatus");
+  s.textContent = msg;
+  s.style.cssText = `font-size:13px;font-weight:600;color:${ok ? "var(--grn)" : "var(--red)"};`;
+  setTimeout(() => { s.textContent = ""; }, 3500);
+}
+
+$("pillEnabled").addEventListener("change", async () => {
+  await chrome.storage.sync.set({ pillEnabled: $("pillEnabled").checked });
+  flashPill($("pillEnabled").checked ? "Pill on ✓" : "Pill off — use Ctrl/Cmd+Shift+K");
+});
+
+$("setPillPos").addEventListener("click", async () => {
+  await chrome.storage.sync.set({ pillCalibrating: true });
+  flashPill("Now: open a web page, highlight text, drag the pill, then release.");
+});
+
+$("resetPillPos").addEventListener("click", async () => {
+  await chrome.storage.sync.set({ pillOffset: null, pillCalibrating: false });
+  flashPill("Pill position reset to default ✓");
 });
 
 // --- Connection (key + model) -------------------------------------------------

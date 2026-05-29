@@ -44,6 +44,15 @@
     .star { background:transparent; border:none; cursor:pointer; font-size:18px;
             color:var(--fg3); line-height:1; padding:0 2px; }
     .star.on { color:#cda14a; }   /* warm gold = the default shown first */
+    .switch { display:flex; align-items:center; gap:10px; cursor:pointer;
+              font-size:13px; font-weight:600; }
+    .switch input { display:none; }
+    .track { width:42px; height:24px; background:var(--bg3); border:1px solid var(--sep);
+             border-radius:999px; position:relative; transition:background .15s; flex:0 0 auto; }
+    .thumb { position:absolute; top:2px; left:2px; width:18px; height:18px; border-radius:50%;
+             background:#fff; box-shadow:0 1px 3px rgba(0,0,0,.3); transition:left .15s; }
+    .switch input:checked + .track { background:var(--act); border-color:var(--act); }
+    .switch input:checked + .track .thumb { left:21px; }
     .row { display:flex; gap:10px; align-items:flex-end; }
     .row > div { flex:1; }
     .preset {
@@ -76,6 +85,23 @@
         <input id="newInstr" placeholder="Instruction, e.g. “Rewrite in a confident tone.”" />
         <button class="btn btn-ghost" id="addPreset">Add</button>
       </div>
+    </div>
+
+    <div class="card">
+      <h2>Highlight pill</h2>
+      <label class="switch">
+        <input type="checkbox" id="pillEnabled" />
+        <span class="track"><span class="thumb"></span></span>
+        <span>Show the ✦ pill when I highlight text</span>
+      </label>
+      <div class="hint">When off, the pill won't appear — just highlight and press Ctrl/Cmd+Shift+K to open the window.</div>
+
+      <div class="saverow" style="margin-top:16px;">
+        <button class="btn btn-ghost" id="setPillPos">Set pill position…</button>
+        <button class="btn btn-ghost" id="resetPillPos">Reset position</button>
+        <span id="pillStatus"></span>
+      </div>
+      <div class="hint">Click “Set pill position”, then switch to a web page, highlight some text, and drag the pill to where you want it. It saves on release and appears there (relative to your highlight) from then on.</div>
     </div>
 
     <div class="card">
