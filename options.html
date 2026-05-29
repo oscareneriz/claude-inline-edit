@@ -41,6 +41,9 @@
     .btn-ghost { background:var(--bg3); color:var(--fg); }
     .btn-ghost:hover { background:var(--sep); }
     .btn-danger { background:transparent; color:var(--red); padding:6px 10px; font-size:18px; }
+    .star { background:transparent; border:none; cursor:pointer; font-size:18px;
+            color:var(--fg3); line-height:1; padding:0 2px; }
+    .star.on { color:#cda14a; }   /* warm gold = the default shown first */
     .row { display:flex; gap:10px; align-items:flex-end; }
     .row > div { flex:1; }
     .preset {
@@ -65,6 +68,17 @@
     <p class="sub">Highlight text anywhere → click the ✦ pill (or press Ctrl/Cmd+Shift+K) → tell Claude how to change it.</p>
 
     <div class="card">
+      <h2>Style presets</h2>
+      <div class="hint" style="margin:-4px 0 12px;">★ marks the preset shown first when the panel opens. Click a star to set it (click again to clear).</div>
+      <div id="presetList"></div>
+      <div class="add-row">
+        <input class="name-in" id="newName" placeholder="Preset name" />
+        <input id="newInstr" placeholder="Instruction, e.g. “Rewrite in a confident tone.”" />
+        <button class="btn btn-ghost" id="addPreset">Add</button>
+      </div>
+    </div>
+
+    <div class="card">
       <h2>Connection</h2>
       <label for="apiKey">Anthropic API key</label>
       <input id="apiKey" type="password" placeholder="sk-ant-…" autocomplete="off" />
@@ -80,16 +94,6 @@
       <div class="saverow" style="margin-top:16px;">
         <button class="btn btn-primary" id="saveConn">Save</button>
         <span id="status"></span>
-      </div>
-    </div>
-
-    <div class="card">
-      <h2>Style presets</h2>
-      <div id="presetList"></div>
-      <div class="add-row">
-        <input class="name-in" id="newName" placeholder="Preset name" />
-        <input id="newInstr" placeholder="Instruction, e.g. “Rewrite in a confident tone.”" />
-        <button class="btn btn-ghost" id="addPreset">Add</button>
       </div>
     </div>
   </div>

@@ -4,6 +4,7 @@ const $ = (id) => document.getElementById(id);
 const DEFAULT_MODEL = "claude-sonnet-4-6";
 
 let presets = [];
+let defaultPreset = "";   // name of the preset preselected when the panel opens
 
 function flash(msg, ok = true) {
   const s = $("status");
@@ -13,10 +14,11 @@ function flash(msg, ok = true) {
 }
 
 // --- Load existing settings ---------------------------------------------------
-chrome.storage.sync.get(["apiKey", "model", "presets"], (r) => {
+chrome.storage.sync.get(["apiKey", "model", "presets", "defaultPreset"], (r) => {
   if (r.apiKey) $("apiKey").value = r.apiKey;
   $("model").value = r.model || DEFAULT_MODEL;
   presets = r.presets || [];
+  defaultPreset = r.defaultPreset || "";
   renderPresets();
 });
 
@@ -44,16 +46,35 @@ function renderPresets() {
     const row = document.createElement("div");
     row.className = "preset";
     row.innerHTML = `
+      <button class="star" title="Show this preset first when the panel opens"></button>
       <span class="name"></span>
       <span class="instr"></span>
       <button class="btn btn-danger" title="Delete">×</button>`;
+    const isDefault = p.name === defaultPreset;
+    const star = row.querySelector(".star");
+    star.textContent = isDefault ? "★" : "☆";
+    star.classList.toggle("on", isDefault);
     row.querySelector(".name").textContent = p.name;
     row.querySelector(".instr").textContent = p.instruction;
-    row.querySelector("button").addEventListener("click", async () => {
+
+    // Star: set this preset as the default (or clear it if it already is).
+    star.addEventListener("click", async () => {
+      defaultPreset = isDefault ? "" : p.name;
+      await chrome.storage.sync.set({ defaultPreset });
+      renderPresets();
+      flash(isDefault ? "Default cleared" : `“${p.name}” shows first now ✓`);
+    });
+
+    // Delete; if it was the default, clear that too.
+    row.querySelector(".btn-danger").addEventListener("click", async () => {
+      const removed = presets[i];
       presets.splice(i, 1);
-      await chrome.storage.sync.set({ presets });
+      const patch = { presets };
+      if (removed && removed.name === defaultPreset) { defaultPreset = ""; patch.defaultPreset = ""; }
+      await chrome.storage.sync.set(patch);
       renderPresets();
     });
+
     list.appendChild(row);
   });
 }

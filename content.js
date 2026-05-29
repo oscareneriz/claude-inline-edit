@@ -21,10 +21,15 @@
   };
 
   let presets = [];
+  let defaultPreset = "";   // name of the preset preselected when the panel opens
   try {
-    chrome.storage.sync.get(["presets"], (r) => { presets = (r && r.presets) || []; });
+    chrome.storage.sync.get(["presets", "defaultPreset"], (r) => {
+      presets = (r && r.presets) || [];
+      defaultPreset = (r && r.defaultPreset) || "";
+    });
     chrome.storage.onChanged.addListener((ch) => {
       if (ch.presets) presets = ch.presets.newValue || [];
+      if (ch.defaultPreset) defaultPreset = ch.defaultPreset.newValue || "";
     });
   } catch (_) {}
 
@@ -55,6 +60,12 @@
         background: ${C.BG}; border: 1px solid ${C.SEP}; border-radius: 12px;
         box-shadow: 0 8px 28px rgba(0,0,0,.28); color: ${C.FG};
       }
+      .head { display: flex; align-items: center; justify-content: space-between;
+              margin: -2px 0 9px; cursor: move; user-select: none; }
+      .title { font-size: 12px; font-weight: 700; color: ${C.FG2}; letter-spacing: .03em; }
+      .grip { cursor: move; color: ${C.FG3}; font-size: 15px; line-height: 1;
+              padding: 2px 7px; border-radius: 6px; }
+      .grip:hover { background: ${C.BG3}; color: ${C.FG}; }
       .row { display: flex; gap: 6px; align-items: center; }
       .label { font-size: 11px; font-weight: 700; color: ${C.FG2};
                text-transform: uppercase; letter-spacing: .04em; margin-bottom: 4px; }
@@ -93,6 +104,10 @@
     <div class="pill" id="pill">✦ Edit</div>
 
     <div class="panel" id="panel">
+      <div class="head" id="head">
+        <span class="title">✦ Claude Inline Edit</span>
+        <span class="grip" id="grip" title="Drag to move">⠿</span>
+      </div>
       <div id="editor">
         <div class="label">Style preset</div>
         <div class="row">
@@ -133,6 +148,7 @@
   const prevNew = root.getElementById("prevNew");
   const applyBtn = root.getElementById("apply");
   const backBtn = root.getElementById("back");
+  const head = root.getElementById("head");
 
   // The selection we'll act on, captured before the panel steals focus.
   let target = null;
@@ -267,13 +283,26 @@
     editor.style.display = "block";
     preview.style.display = "none";
 
-    const r = selectionRect();
     panel.style.display = "block";
-    const left = Math.min(r ? r.left : 60, window.innerWidth - 340);
-    const top = Math.min(r ? r.bottom + 6 : 60, window.innerHeight - 230);
-    panel.style.left = Math.max(8, left) + "px";
-    panel.style.top = Math.max(8, top) + "px";
+    applyDefaultPreset();            // preselect the user's default preset, if any
+
+    // Always spawn near the top-right corner of the viewport.
+    const w = panel.offsetWidth || 320;
+    panel.style.left = Math.max(8, window.innerWidth - w - 14) + "px";
+    panel.style.top = "14px";
     setTimeout(() => instruction.focus(), 0);
+  }
+
+  // Preselect the default preset (by name) and load its instruction text.
+  function applyDefaultPreset() {
+    if (!defaultPreset) { presetSel.value = ""; return; }
+    const idx = presets.findIndex((p) => p.name === defaultPreset);
+    if (idx >= 0) {
+      presetSel.value = String(idx);
+      instruction.value = presets[idx].instruction;
+    } else {
+      presetSel.value = "";
+    }
   }
 
   function closePanel() {
@@ -313,6 +342,27 @@
     if (e.target === instruction || e.target === presetSel) return;
     e.preventDefault();
   });
+
+  // --- Drag the panel by its header ------------------------------------------
+  let drag = null;
+  head.addEventListener("mousedown", (e) => {
+    drag = {
+      x: e.clientX, y: e.clientY,
+      left: parseFloat(panel.style.left) || 0,
+      top: parseFloat(panel.style.top) || 0
+    };
+    e.preventDefault();
+  });
+  window.addEventListener("mousemove", (e) => {
+    if (!drag) return;
+    let nl = drag.left + (e.clientX - drag.x);
+    let nt = drag.top + (e.clientY - drag.y);
+    nl = Math.max(6, Math.min(nl, window.innerWidth - (panel.offsetWidth || 320) - 6));
+    nt = Math.max(6, Math.min(nt, window.innerHeight - 40));
+    panel.style.left = nl + "px";
+    panel.style.top = nt + "px";
+  });
+  window.addEventListener("mouseup", () => { drag = null; });
 
   instruction.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); run(); }
