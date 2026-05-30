@@ -582,10 +582,12 @@
     ro.observe(panel);
   } catch (_) {}
 
-  // Keep the page selection alive when clicking buttons inside our panel.
-  // Listen on the shadow root so e.target is the real inner element.
+  // Keep the page selection alive when clicking buttons inside our panel, but
+  // DON'T block focus on fields the user needs to click into (type or edit).
   root.addEventListener("mousedown", (e) => {
-    if (e.target === instruction || e.target === presetSel) return;
+    const t = e.target;
+    const tag = t && t.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (t && t.isContentEditable)) return;
     e.preventDefault();
   });
 
