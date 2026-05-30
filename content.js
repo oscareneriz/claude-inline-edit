@@ -189,6 +189,9 @@
              border: 1px solid ${C.SEP}; }
       .orig { background: ${C.BG2}; color: ${C.FG2}; }
       .neww { background: #fff; color: ${C.FG}; border-color: ${C.ACT}; }
+      .neww:focus { outline: none; border-color: ${C.ACT2};
+                    box-shadow: 0 0 0 2px rgba(64,168,184,.25); }
+      .refine { margin-top: 8px; }
       .calbar { position: fixed; display: none; pointer-events: auto;
                 left: 50%; top: 16px; transform: translateX(-50%);
                 align-items: center; gap: 8px; padding: 9px 12px;
@@ -231,15 +234,17 @@
       <div id="preview" style="display:none">
         <div class="label">Before</div>
         <div class="box orig" id="prevOrig"></div>
-        <div class="label" style="margin-top:8px">After</div>
-        <div class="box neww" id="prevNew"></div>
+        <div class="label" style="margin-top:8px">After (editable)</div>
+        <div class="box neww" id="prevNew" contenteditable="true" spellcheck="false"></div>
         <div class="fmtrow">
           <span class="fmtlabel">Insert as</span>
           <button class="btn fmtbtn" id="fmtPlain2">Plain text</button>
           <button class="btn fmtbtn" id="fmtBold2">Bold</button>
         </div>
+        <input id="refine" class="refine" placeholder="Optional: what to change, then Rewrite ↻" />
         <div class="foot">
           <button class="btn btn-primary" id="apply">Apply ✓</button>
+          <button class="btn btn-primary" id="reroll">Rewrite ↻</button>
           <button class="btn btn-ghost" id="back">Back</button>
         </div>
       </div>
@@ -260,6 +265,8 @@
   const prevOrig = root.getElementById("prevOrig");
   const prevNew = root.getElementById("prevNew");
   const applyBtn = root.getElementById("apply");
+  const rerollBtn = root.getElementById("reroll");
+  const refineInput = root.getElementById("refine");
   const backBtn = root.getElementById("back");
   const head = root.getElementById("head");
   const sizeBtn = root.getElementById("sizeBtn");
@@ -275,6 +282,7 @@
   let target = null;
   // The rewrite waiting in the preview, not yet applied.
   let pendingText = null;
+  let lastInstruction = "";   // reused by Rewrite ↻ when the refine field is empty
 
   // --- Selection capture (called only on mouseup / shortcut) ------------------
   function captureSelection() {
@@ -413,6 +421,7 @@
     setStatus("");
     instruction.value = "";
     presetSel.value = "";
+    refineInput.value = "";
     pendingText = null;
     editor.style.display = "block";
     preview.style.display = "none";
@@ -717,6 +726,14 @@
 
   goBtn.addEventListener("click", run);
 
+  async function requestRewrite(text, instruction) {
+    try {
+      return await chrome.runtime.sendMessage({ type: "rewrite", text, instruction });
+    } catch (e) {
+      return { error: "Extension link lost — reload the page and try again." };
+    }
+  }
+
   async function run() {
     const instr = instruction.value.trim();
     if (!instr) { setStatus("Tell Claude what to do first.", "err"); return; }
@@ -724,33 +741,56 @@
 
     goBtn.disabled = true;
     setStatus(`<span class="spin"></span>Asking Claude…`);
-
-    let resp;
-    try {
-      resp = await chrome.runtime.sendMessage({
-        type: "rewrite", text: target.text, instruction: instr
-      });
-    } catch (e) {
-      resp = { error: "Extension link lost — reload the page and try again." };
-    }
-
+    const resp = await requestRewrite(target.text, instr);
     goBtn.disabled = false;
 
     if (!resp || resp.error) { setStatus(resp ? resp.error : "Unknown error.", "err"); return; }
 
-    // Show a before/after preview instead of replacing immediately.
+    // Show an editable before/after preview instead of replacing immediately.
+    lastInstruction = instr;
     pendingText = resp.text;
     prevOrig.textContent = target.text;
     renderPreviewAfter();            // renders plain or bold per the current mode
+    refineInput.value = "";
     editor.style.display = "none";
     preview.style.display = "block";
-    setStatus("Review the change, then Apply.");
+    setStatus("Edit the result, then Apply ✓ — or Rewrite ↻ to iterate.");
     clampIntoView();                 // preview is taller — keep it on-screen
   }
 
+  // Rewrite ↻ on the preview: feed the current (edited) After text back in,
+  // shifting it to Before and the new output to After so you can keep iterating.
+  async function reroll() {
+    if (!target) return;
+    const src = prevNew.innerText.trim();
+    if (!src) { setStatus("Nothing to rewrite.", "err"); return; }
+    const instr = refineInput.value.trim() || lastInstruction || "Rewrite this.";
+
+    rerollBtn.disabled = true; applyBtn.disabled = true;
+    setStatus(`<span class="spin"></span>Rewriting…`);
+    const resp = await requestRewrite(src, instr);
+    rerollBtn.disabled = false; applyBtn.disabled = false;
+
+    if (!resp || resp.error) { setStatus(resp ? resp.error : "Unknown error.", "err"); return; }
+
+    prevOrig.textContent = src;      // the text we just rewrote → Before
+    pendingText = resp.text;         // new output → After
+    lastInstruction = instr;
+    refineInput.value = "";
+    renderPreviewAfter();
+    setStatus("Edit, Apply ✓, or Rewrite ↻ again.");
+    clampIntoView();
+  }
+  rerollBtn.addEventListener("click", reroll);
+  refineInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); reroll(); }
+  });
+  // Keep pendingText in sync with manual edits to the After box.
+  prevNew.addEventListener("input", () => { pendingText = prevNew.innerText; });
+
   applyBtn.addEventListener("click", () => {
     if (pendingText == null) return;
-    const applied = applyResult(pendingText);
+    const applied = applyResult();
     if (applied === "replaced") { setStatus("Done ✓", "ok"); setTimeout(closePanel, 400); }
     else { setStatus("That text isn't editable — result copied to clipboard ✓", "ok"); }
   });
@@ -763,10 +803,10 @@
   });
 
   // --- Apply the rewrite ------------------------------------------------------
-  function applyResult(newText) {
-    const plain = mdToPlain(newText);
+  function applyResult() {
+    const plain = prevNew.innerText;   // exactly what you see/edited in the After box
     if (target.kind === "input") {
-      // Inputs/textareas can't hold formatting — always plain, no stray markdown.
+      // Inputs/textareas can't hold formatting — always plain text.
       const el = target.el, v = el.value;
       el.value = v.slice(0, target.start) + plain + v.slice(target.end);
       const caret = target.start + plain.length;
@@ -784,8 +824,7 @@
       // execCommand is deprecated but remains the most reliable way to edit
       // contenteditable surfaces (Gmail, Slack) — it fires the events they expect.
       if (formatMode === "rich") {
-        // Render **bold** as real bold, escaping everything else.
-        if (document.execCommand("insertHTML", false, mdToHtml(newText))) return "replaced";
+        if (document.execCommand("insertHTML", false, prevNew.innerHTML)) return "replaced";
       }
       if (document.execCommand("insertText", false, plain)) return "replaced";
     }
